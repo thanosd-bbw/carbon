@@ -78,6 +78,8 @@ export default function PartsNewRoute() {
     unitOfMeasureCode: "EA",
     unitCost: 0,
     lotSize: 0,
+    serialReadableIdPrefix: "",
+    retainReadableIdFromConsumedTrackedEntity: false,
     active: true
   };
 

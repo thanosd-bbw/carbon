@@ -484,12 +484,24 @@ export const materialTypeValidator = z.object({
   code: z.string().min(1, { message: "Code is required" }).max(10)
 });
 
+export const serialReadableIdPrefixValidator = zfd
+  .text(z.string().optional())
+  .transform((value) => {
+    const normalized = value?.trim().toUpperCase();
+    return normalized ? normalized : undefined;
+  })
+  .refine((value) => value === undefined || /^[A-Z0-9_-]+$/.test(value), {
+    message: "Prefix may only contain letters, numbers, - and _"
+  });
+
 export const partValidator = itemValidator.merge(
   z.object({
     id: z.string().min(1, { message: "Part ID is required" }).max(255),
     revision: z.string().min(1, { message: "Revision is required" }),
     modelUploadId: zfd.text(z.string().optional()),
-    lotSize: zfd.numeric(z.number().min(0).optional())
+    lotSize: zfd.numeric(z.number().min(0).optional()),
+    serialReadableIdPrefix: serialReadableIdPrefixValidator,
+    retainReadableIdFromConsumedTrackedEntity: zfd.checkbox()
   })
 );
 

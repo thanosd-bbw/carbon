@@ -30,6 +30,7 @@ import { useFetcher } from "react-router";
 import type { z } from "zod";
 import { TrackingTypeIcon } from "~/components";
 import {
+  Boolean as BooleanField,
   CustomFormFields,
   DefaultMethodType,
   Hidden,
@@ -261,6 +262,18 @@ const PartForm = ({ initialValues, type = "card", onClose }: PartFormProps) => {
                   options={itemTrackingTypeOptions}
                 />
 
+                <Input
+                  name="serialReadableIdPrefix"
+                  label="Serial Readable ID Prefix"
+                  helperText="Used when this part generates a new readable ID on receipt."
+                />
+
+                <BooleanField
+                  name="retainReadableIdFromConsumedTrackedEntity"
+                  label="Retain Upstream Readable ID"
+                  description="Carry the readable ID from a consumed tracked part through this part instead of generating a new one on receipt."
+                />
+
                 <Select
                   name="replenishmentSystem"
                   label="Replenishment System"
@@ -288,7 +301,11 @@ const PartForm = ({ initialValues, type = "card", onClose }: PartFormProps) => {
                   label="Unit of Measure"
                 />
                 {!isEditing && (
-                  <ItemPostingGroup name="postingGroupId" label="Item Group" isClearable />
+                  <ItemPostingGroup
+                    name="postingGroupId"
+                    label="Item Group"
+                    isClearable
+                  />
                 )}
                 {!isEditing && replenishmentSystem !== "Make" && (
                   <Number

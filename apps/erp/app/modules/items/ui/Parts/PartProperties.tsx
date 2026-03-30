@@ -24,7 +24,7 @@ import { z } from "zod";
 import { zfd } from "zod-form-data";
 import { MethodBadge, MethodIcon, TrackingTypeIcon } from "~/components";
 import {
-  Boolean,
+  Boolean as BooleanField,
   ItemPostingGroup,
   Tags,
   UnitOfMeasure
@@ -99,6 +99,8 @@ const PartProperties = () => {
         | "partId"
         | "name"
         | "replenishmentSystem"
+        | "retainReadableIdFromConsumedTrackedEntity"
+        | "serialReadableIdPrefix"
         | "unitOfMeasureCode",
       value: string | null
     ) => {
@@ -437,6 +439,52 @@ const PartProperties = () => {
         />
       </ValidatedForm>
 
+      <ValidatedForm
+        defaultValues={{
+          retainReadableIdFromConsumedTrackedEntity:
+            routeData?.partSummary?.retainReadableIdFromConsumedTrackedEntity ??
+            false
+        }}
+        validator={z.object({
+          retainReadableIdFromConsumedTrackedEntity: zfd.checkbox()
+        })}
+        className="w-full"
+      >
+        <BooleanField
+          label="Retain Upstream Readable ID"
+          name="retainReadableIdFromConsumedTrackedEntity"
+          variant="small"
+          onChange={(value) => {
+            onUpdate(
+              "retainReadableIdFromConsumedTrackedEntity",
+              value ? "on" : "off"
+            );
+          }}
+        />
+      </ValidatedForm>
+
+      <ValidatedForm
+        defaultValues={{
+          serialReadableIdPrefix:
+            routeData?.partSummary?.serialReadableIdPrefix ?? undefined
+        }}
+        validator={z.object({
+          serialReadableIdPrefix: z.string().optional()
+        })}
+        className="w-full"
+      >
+        <InputControlled
+          name="serialReadableIdPrefix"
+          label="Serial Prefix"
+          inline
+          helperText="Used when this part generates a new readable ID."
+          value={routeData?.partSummary?.serialReadableIdPrefix ?? ""}
+          onBlur={(e) => {
+            onUpdate("serialReadableIdPrefix", e.target.value ?? null);
+          }}
+        />
+      </ValidatedForm>
+
       <VStack spacing={2}>
         <HStack className="w-full justify-between">
           <h3 className="text-xs text-muted-foreground">Methods</h3>
@@ -493,7 +541,7 @@ const PartProperties = () => {
         })}
         className="w-full"
       >
-        <Boolean
+        <BooleanField
           label="Active"
           name="active"
           variant="small"

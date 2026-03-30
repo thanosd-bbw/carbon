@@ -695,6 +695,17 @@ export async function updateJobTravelerWorkInstructions(
     .eq("id", companyId);
 }
 
+export async function updateManufacturedSerialReadableIdSetting(
+  client: SupabaseClient<Database>,
+  companyId: string,
+  autoAssignManufacturedSerialReadableIdsOnReceipt: boolean
+) {
+  return client
+    .from("companySettings")
+    .update(sanitize({ autoAssignManufacturedSerialReadableIdsOnReceipt }))
+    .eq("id", companyId);
+}
+
 export async function updateTimeCardSetting(
   client: SupabaseClient<Database>,
   companyId: string,

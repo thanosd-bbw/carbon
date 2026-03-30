@@ -2923,6 +2923,7 @@ export type Database = {
           accountsPayableEmail: string | null
           accountsReceivableAddress: boolean | null
           accountsReceivableEmail: string | null
+          autoAssignManufacturedSerialReadableIdsOnReceipt: boolean
           defaultCustomerCc: string[] | null
           defaultSupplierCc: string[] | null
           digitalQuoteEnabled: boolean
@@ -2960,6 +2961,7 @@ export type Database = {
           accountsPayableEmail?: string | null
           accountsReceivableAddress?: boolean | null
           accountsReceivableEmail?: string | null
+          autoAssignManufacturedSerialReadableIdsOnReceipt?: boolean
           defaultCustomerCc?: string[] | null
           defaultSupplierCc?: string[] | null
           digitalQuoteEnabled?: boolean
@@ -2997,6 +2999,7 @@ export type Database = {
           accountsPayableEmail?: string | null
           accountsReceivableAddress?: boolean | null
           accountsReceivableEmail?: string | null
+          autoAssignManufacturedSerialReadableIdsOnReceipt?: boolean
           defaultCustomerCc?: string[] | null
           defaultSupplierCc?: string[] | null
           digitalQuoteEnabled?: boolean
@@ -21078,6 +21081,9 @@ export type Database = {
           customFields: Json | null
           fromDate: string | null
           id: string
+          nextSerialReadableIdNumber: number | null
+          retainReadableIdFromConsumedTrackedEntity: boolean
+          serialReadableIdPrefix: string | null
           tags: string[] | null
           toDate: string | null
           updatedAt: string | null
@@ -21092,6 +21098,9 @@ export type Database = {
           customFields?: Json | null
           fromDate?: string | null
           id?: string
+          nextSerialReadableIdNumber?: number | null
+          retainReadableIdFromConsumedTrackedEntity?: boolean
+          serialReadableIdPrefix?: string | null
           tags?: string[] | null
           toDate?: string | null
           updatedAt?: string | null
@@ -21106,6 +21115,9 @@ export type Database = {
           customFields?: Json | null
           fromDate?: string | null
           id?: string
+          nextSerialReadableIdNumber?: number | null
+          retainReadableIdFromConsumedTrackedEntity?: boolean
+          serialReadableIdPrefix?: string | null
           tags?: string[] | null
           toDate?: string | null
           updatedAt?: string | null
@@ -56630,6 +56642,12 @@ export type Database = {
     }
     Functions: {
       _xid_machine_id: { Args: never; Returns: number }
+      allocate_part_serial_readable_ids: {
+        Args: { p_company_id: string; p_count: number; p_item_id: string }
+        Returns: {
+          readableId: string
+        }[]
+      }
       attach_event_trigger: {
         Args: { sync_functions?: string[]; table_name_text: string }
         Returns: undefined
@@ -57604,12 +57622,15 @@ export type Database = {
           modelPath: string
           modelSize: number
           name: string
+          nextSerialReadableIdNumber: number
           notes: Json
           readableId: string
           readableIdWithRevision: string
           replenishmentSystem: Database["public"]["Enums"]["itemReplenishmentSystem"]
+          retainReadableIdFromConsumedTrackedEntity: boolean
           revision: string
           revisions: Json
+          serialReadableIdPrefix: string
           tags: string[]
           thumbnailPath: string
           unitOfMeasure: string

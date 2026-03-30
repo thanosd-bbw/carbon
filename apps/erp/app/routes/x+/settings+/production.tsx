@@ -1,7 +1,12 @@
 import { error } from "@carbon/auth";
 import { requirePermissions } from "@carbon/auth/auth.server";
 import { flash } from "@carbon/auth/session.server";
-import { Boolean, Submit, ValidatedForm, validator } from "@carbon/form";
+import {
+  Boolean as BooleanField,
+  Submit,
+  ValidatedForm,
+  validator
+} from "@carbon/form";
 import {
   Card,
   CardContent,
@@ -23,7 +28,9 @@ import {
   getCompanySettings,
   jobCompletedValidator,
   jobTravelerSettingsValidator,
-  updateJobTravelerWorkInstructions
+  manufacturedSerialReadableIdSettingsValidator,
+  updateJobTravelerWorkInstructions,
+  updateManufacturedSerialReadableIdSetting
 } from "~/modules/settings";
 import type { Handle } from "~/utils/handle";
 import { path } from "~/utils/path";
@@ -101,6 +108,29 @@ export async function action({ request }: ActionFunctionArgs) {
     if (update.error) return { success: false, message: update.error.message };
 
     return { success: true, message: "Job traveler settings updated" };
+  }
+
+  if (intent === "manufacturedSerialReadableIds") {
+    const validation = await validator(
+      manufacturedSerialReadableIdSettingsValidator
+    ).validate(formData);
+
+    if (validation.error) {
+      return { success: false, message: "Invalid form data" };
+    }
+
+    const update = await updateManufacturedSerialReadableIdSetting(
+      client,
+      companyId,
+      validation.data.autoAssignManufacturedSerialReadableIdsOnReceipt
+    );
+
+    if (update.error) return { success: false, message: update.error.message };
+
+    return {
+      success: true,
+      message: "Manufactured serial readable ID settings updated"
+    };
   }
 
   return { success: false, message: "Unknown intent" };
@@ -183,6 +213,54 @@ export default function ProductionSettingsRoute() {
         <Card>
           <ValidatedForm
             method="post"
+            validator={manufacturedSerialReadableIdSettingsValidator}
+            defaultValues={{
+              autoAssignManufacturedSerialReadableIdsOnReceipt:
+                companySettings.autoAssignManufacturedSerialReadableIdsOnReceipt ??
+                false
+            }}
+            fetcher={fetcher}
+          >
+            <input
+              type="hidden"
+              name="intent"
+              value="manufacturedSerialReadableIds"
+            />
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                Manufactured Serial Readable IDs
+              </CardTitle>
+              <CardDescription>
+                Automatically assign readable IDs to finished serial-tracked
+                parts when a completed job is received into inventory.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col gap-2 max-w-[520px]">
+                <BooleanField
+                  name="autoAssignManufacturedSerialReadableIdsOnReceipt"
+                  description="Auto-assign serial readable IDs on job receipt"
+                />
+              </div>
+            </CardContent>
+            <CardFooter>
+              <Submit
+                isDisabled={fetcher.state !== "idle"}
+                isLoading={
+                  fetcher.state !== "idle" &&
+                  fetcher.formData?.get("intent") ===
+                    "manufacturedSerialReadableIds"
+                }
+              >
+                Save
+              </Submit>
+            </CardFooter>
+          </ValidatedForm>
+        </Card>
+
+        <Card>
+          <ValidatedForm
+            method="post"
             validator={jobTravelerSettingsValidator}
             defaultValues={{
               jobTravelerIncludeWorkInstructions:
@@ -201,7 +279,7 @@ export default function ProductionSettingsRoute() {
             </CardHeader>
             <CardContent>
               <div className="flex flex-col gap-2 max-w-[400px]">
-                <Boolean
+                <BooleanField
                   name="jobTravelerIncludeWorkInstructions"
                   description="Include Work Instructions"
                 />

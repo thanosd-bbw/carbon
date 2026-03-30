@@ -2159,7 +2159,10 @@ export async function upsertPart(
         id: part.id,
         companyId: part.companyId,
         createdBy: part.createdBy,
-        customFields: part.customFields
+        customFields: part.customFields,
+        serialReadableIdPrefix: part.serialReadableIdPrefix ?? null,
+        retainReadableIdFromConsumedTrackedEntity:
+          part.retainReadableIdFromConsumedTrackedEntity
       }),
       client
         .from("itemCost")
@@ -2197,8 +2200,24 @@ export async function upsertPart(
     return newPart;
   }
 
+  const currentItem = await client
+    .from("item")
+    .select("readableId, companyId")
+    .eq("id", part.id)
+    .single();
+
+  if (currentItem.error) return currentItem;
+
+  const currentPart = await client
+    .from("part")
+    .select("serialReadableIdPrefix, retainReadableIdFromConsumedTrackedEntity")
+    .eq("id", currentItem.data.readableId)
+    .eq("companyId", currentItem.data.companyId)
+    .single();
+
+  if (currentPart.error) return currentPart;
+
   const itemUpdate = {
-    id: part.id,
     name: part.name,
     description: part.description,
     replenishmentSystem: part.replenishmentSystem,
@@ -2209,7 +2228,14 @@ export async function upsertPart(
   };
 
   const partUpdate = {
-    customFields: part.customFields
+    customFields: part.customFields,
+    serialReadableIdPrefix: part.serialReadableIdPrefix ?? null,
+    retainReadableIdFromConsumedTrackedEntity:
+      part.retainReadableIdFromConsumedTrackedEntity,
+    ...(currentPart.data.serialReadableIdPrefix !==
+    (part.serialReadableIdPrefix ?? null)
+      ? { nextSerialReadableIdNumber: null }
+      : {})
   };
 
   const [updateItem, updatePart] = await Promise.all([
@@ -2226,7 +2252,8 @@ export async function upsertPart(
         ...sanitize(partUpdate),
         updatedAt: today(getLocalTimeZone()).toString()
       })
-      .eq("itemId", part.id)
+      .eq("id", currentItem.data.readableId)
+      .eq("companyId", currentItem.data.companyId)
   ]);
 
   if (updateItem.error) return updateItem;

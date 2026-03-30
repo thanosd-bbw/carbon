@@ -392,10 +392,84 @@ export async function action({ request }: ActionFunctionArgs) {
         if (partUpdate.error) {
           return partUpdate;
         }
-        if (itemUpdates.error) {
-        }
         return itemUpdates;
       }
+    case "serialReadableIdPrefix":
+    case "retainReadableIdFromConsumedTrackedEntity":
+      if (items.length > 1) {
+        return {
+          error: { message: "Cannot update multiple items" },
+          data: null
+        };
+      }
+
+      const [partItemId] = items as string[];
+      const normalizedPrefix = value.trim().toUpperCase();
+      if (
+        field === "serialReadableIdPrefix" &&
+        normalizedPrefix &&
+        !/^[A-Z0-9_-]+$/.test(normalizedPrefix)
+      ) {
+        return {
+          error: {
+            message: "Prefix may only contain letters, numbers, - and _"
+          },
+          data: null
+        };
+      }
+
+      const partItem = await client
+        .from("item")
+        .select("readableId, type")
+        .eq("id", partItemId)
+        .eq("type", "Part")
+        .eq("companyId", companyId)
+        .single();
+
+      if (partItem.error) {
+        return partItem;
+      }
+
+      if (partItem.data?.type !== "Part") {
+        return { error: { message: "Item is not a part" }, data: null };
+      }
+
+      const currentPart = await client
+        .from("part")
+        .select(
+          "serialReadableIdPrefix, retainReadableIdFromConsumedTrackedEntity"
+        )
+        .eq("id", partItem.data.readableId)
+        .eq("companyId", companyId)
+        .single();
+
+      if (currentPart.error) {
+        return currentPart;
+      }
+
+      return client
+        .from("part")
+        .update({
+          serialReadableIdPrefix:
+            field === "serialReadableIdPrefix"
+              ? normalizedPrefix || null
+              : (currentPart.data?.serialReadableIdPrefix ?? null),
+          retainReadableIdFromConsumedTrackedEntity:
+            field === "retainReadableIdFromConsumedTrackedEntity"
+              ? value === "on"
+              : (currentPart.data?.retainReadableIdFromConsumedTrackedEntity ??
+                false),
+          ...(currentPart.data?.serialReadableIdPrefix !==
+          (field === "serialReadableIdPrefix"
+            ? normalizedPrefix || null
+            : (currentPart.data?.serialReadableIdPrefix ?? null))
+            ? { nextSerialReadableIdNumber: null }
+            : {}),
+          updatedBy: userId,
+          updatedAt: new Date().toISOString()
+        })
+        .eq("id", partItem.data.readableId)
+        .eq("companyId", companyId);
     case "consumableId":
       if (items.length > 1) {
         return {
@@ -458,8 +532,6 @@ export async function action({ request }: ActionFunctionArgs) {
         ]);
         if (consumableUpdate.error) {
           return consumableUpdate;
-        }
-        if (consumableItemUpdates.error) {
         }
         return consumableItemUpdates;
       }
@@ -524,8 +596,6 @@ export async function action({ request }: ActionFunctionArgs) {
         if (materialUpdate.error) {
           return materialUpdate;
         }
-        if (materialItemUpdates.error) {
-        }
         return materialItemUpdates;
       }
     case "toolId":
@@ -585,8 +655,6 @@ export async function action({ request }: ActionFunctionArgs) {
         ]);
         if (toolUpdate.error) {
           return toolUpdate;
-        }
-        if (toolItemUpdates.error) {
         }
         return toolItemUpdates;
       }

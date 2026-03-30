@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.175.0/http/server.ts";
 import { z } from "npm:zod@^3.24.1";
+import { sql } from "npm:kysely@0.27.6";
 
 import { DB, getConnectionPool, getDatabaseClient } from "../lib/database.ts";
 
@@ -201,27 +202,49 @@ serve(async (req: Request) => {
         );
 
         await db.transaction().execute(async (trx) => {
-          const job = await trx
-            .selectFrom("job")
-            .where("id", "=", jobId)
-            .select(["itemId", "quantityReceivedToInventory"])
-            .executeTakeFirstOrThrow();
-
-          const jobMakeMethod = await trx
-            .selectFrom("jobMakeMethod")
-            .where("jobId", "=", jobId)
-            .where("parentMaterialId", "is", null)
-            .selectAll()
-            .executeTakeFirstOrThrow();
+          const [job, jobMakeMethod, companySettings] = await Promise.all([
+            trx
+              .selectFrom("job")
+              .where("id", "=", jobId)
+              .select(["itemId", "quantityReceivedToInventory"])
+              .executeTakeFirstOrThrow(),
+            trx
+              .selectFrom("jobMakeMethod")
+              .where("jobId", "=", jobId)
+              .where("parentMaterialId", "is", null)
+              .selectAll()
+              .executeTakeFirstOrThrow(),
+            trx
+              .selectFrom("companySettings")
+              .where("id", "=", companyId)
+              .select("autoAssignManufacturedSerialReadableIdsOnReceipt")
+              .executeTakeFirstOrThrow(),
+          ]);
 
           const item = await trx
             .selectFrom("item")
             .where("id", "=", job?.itemId!)
-            .select(["readableIdWithRevision"])
+            .select(["readableId", "readableIdWithRevision", "type"])
             .executeTakeFirstOrThrow();
+
+          const partReadableIdSettings =
+            item.type === "Part"
+              ? await trx
+                  .selectFrom("part")
+                  .where("id", "=", item.readableId)
+                  .where("companyId", "=", companyId)
+                  .select("retainReadableIdFromConsumedTrackedEntity")
+                  .executeTakeFirst()
+              : null;
 
           const quantityReceivedToInventory =
             quantityComplete - (job?.quantityReceivedToInventory ?? 0);
+
+          if (quantityReceivedToInventory < 0) {
+            throw new Error(
+              "Quantity received to inventory cannot be less than the quantity already received"
+            );
+          }
 
           await trx
             .updateTable("job")
@@ -260,18 +283,143 @@ serve(async (req: Request) => {
               createdBy: userId,
             });
           } else if (jobMakeMethod.requiresSerialTracking) {
+            if (!Number.isInteger(quantityReceivedToInventory)) {
+              throw new Error(
+                "Serial-tracked job receipts must be completed in whole-number quantities"
+              );
+            }
+
             const trackedEntities = await client
               .from("trackedEntity")
               .select("*")
               .eq("attributes->>Job Make Method", jobMakeMethod.id!)
-              .neq("status", "Consumed");
+              .eq("status", "Available")
+              .order("createdAt", { ascending: true });
 
             if (!trackedEntities.data) {
               throw new Error("Tracked entities not found");
             }
 
-            // TODO: we probably need some user input for determining which entities go into inventory
-            trackedEntities.data.forEach((trackedEntity) => {
+            const receivedLedgerEntries =
+              trackedEntities.data.length > 0
+                ? await trx
+                    .selectFrom("itemLedger")
+                    .select("trackedEntityId")
+                    .where("companyId", "=", companyId)
+                    .where("documentType", "=", "Job Receipt")
+                    .where("documentId", "=", jobId)
+                    .where(
+                      "trackedEntityId",
+                      "in",
+                      trackedEntities.data.map((trackedEntity) => trackedEntity.id)
+                    )
+                    .execute()
+                : [];
+
+            const receivedTrackedEntityIds = new Set(
+              receivedLedgerEntries
+                .map((entry) => entry.trackedEntityId)
+                .filter((trackedEntityId): trackedEntityId is string =>
+                  Boolean(trackedEntityId)
+                )
+            );
+
+            const trackedEntitiesToReceive = trackedEntities.data.filter(
+              (trackedEntity) =>
+                !receivedTrackedEntityIds.has(trackedEntity.id)
+            );
+
+            const serialReceiptCount = Math.max(0, quantityReceivedToInventory);
+            const trackedEntitiesInThisReceipt = trackedEntitiesToReceive.slice(
+              0,
+              serialReceiptCount
+            );
+
+            if (trackedEntitiesInThisReceipt.length !== serialReceiptCount) {
+              throw new Error(
+                "Not enough completed serial-tracked parts are available to receive into inventory"
+              );
+            }
+
+            const trackedEntitiesWithoutReadableIds =
+              trackedEntitiesInThisReceipt.filter(
+                (trackedEntity) => !trackedEntity.readableId?.trim()
+              );
+
+            const shouldRetainReadableIdFromConsumedTrackedEntity =
+              item.type === "Part" &&
+              Boolean(
+                partReadableIdSettings?.retainReadableIdFromConsumedTrackedEntity
+              );
+
+            if (
+              shouldRetainReadableIdFromConsumedTrackedEntity &&
+              trackedEntitiesWithoutReadableIds.length > 0
+            ) {
+              throw new Error(
+                "This part is configured to retain a readable ID from a consumed tracked part, but one or more completed units do not have a readable ID yet"
+              );
+            }
+
+            if (
+              !shouldRetainReadableIdFromConsumedTrackedEntity &&
+              companySettings.autoAssignManufacturedSerialReadableIdsOnReceipt &&
+              item.type === "Part"
+            ) {
+
+              if (trackedEntitiesWithoutReadableIds.length > 0) {
+                const allocatedReadableIds = await sql<{ readableId: string }>`
+                  SELECT "readableId"
+                  FROM allocate_part_serial_readable_ids(
+                    ${job.itemId},
+                    ${companyId},
+                    ${trackedEntitiesWithoutReadableIds.length}
+                  )
+                `.execute(trx);
+
+                if (
+                  allocatedReadableIds.rows.length !==
+                  trackedEntitiesWithoutReadableIds.length
+                ) {
+                  throw new Error(
+                    "Failed to allocate the expected number of serial readable IDs"
+                  );
+                }
+
+                const allocatedByTrackedEntityId = new Map(
+                  trackedEntitiesWithoutReadableIds.map((trackedEntity, index) => [
+                    trackedEntity.id,
+                    allocatedReadableIds.rows[index]?.readableId ?? "",
+                  ])
+                );
+
+                for (const trackedEntity of trackedEntitiesWithoutReadableIds) {
+                  const readableId = allocatedByTrackedEntityId.get(
+                    trackedEntity.id
+                  );
+
+                  if (!readableId) {
+                    throw new Error(
+                      `Missing allocated readable ID for tracked entity ${trackedEntity.id}`
+                    );
+                  }
+
+                  await trx
+                    .updateTable("trackedEntity")
+                    .set({
+                      readableId,
+                      updatedAt: new Date().toISOString(),
+                      updatedBy: userId,
+                    })
+                    .where("id", "=", trackedEntity.id)
+                    .execute();
+
+                  trackedEntity.readableId = readableId;
+                }
+              }
+            }
+
+            trackedEntitiesInThisReceipt.forEach((trackedEntity) => {
               itemLedgerInserts.push({
                 entryType: "Assembly Output",
                 documentType: "Job Receipt",
@@ -285,18 +433,6 @@ serve(async (req: Request) => {
                 createdBy: userId,
               });
             });
-
-            await trx
-              .updateTable("trackedEntity")
-              .set({
-                status: "Available",
-              })
-              .where(
-                "id",
-                "in",
-                trackedEntities.data.map((trackedEntity) => trackedEntity.id)
-              )
-              .execute();
           } else {
             itemLedgerInserts.push({
               entryType: "Assembly Output",
@@ -1342,6 +1478,7 @@ serve(async (req: Request) => {
             .where("id", "=", parentTrackedEntityId)
             .select([
               "id",
+              "readableId",
               "sourceDocumentId",
               "quantity",
               "attributes",
@@ -1351,6 +1488,72 @@ serve(async (req: Request) => {
 
           if (!parentTrackedEntity) {
             throw new Error("Parent tracked entity not found");
+          }
+
+          const parentItem = parentTrackedEntity.sourceDocumentId
+            ? await trx
+                .selectFrom("item")
+                .where("id", "=", parentTrackedEntity.sourceDocumentId)
+                .select(["type", "readableId"])
+                .executeTakeFirst()
+            : undefined;
+
+          const parentPartSettings =
+            parentItem?.type === "Part"
+              ? await trx
+                  .selectFrom("part")
+                  .where("id", "=", parentItem.readableId)
+                  .where("companyId", "=", companyId)
+                  .select("retainReadableIdFromConsumedTrackedEntity")
+                  .executeTakeFirst()
+              : undefined;
+
+          const shouldRetainParentReadableId = Boolean(
+            parentPartSettings?.retainReadableIdFromConsumedTrackedEntity
+          );
+
+          if (shouldRetainParentReadableId) {
+            const currentParentReadableId = parentTrackedEntity.readableId?.trim();
+            const consumedReadableIds = Array.from(
+              new Set(
+                trackedEntities
+                  .map((entity) => entity.readableId?.trim())
+                  .filter((readableId): readableId is string =>
+                    Boolean(readableId)
+                  )
+              )
+            );
+
+            if (
+              currentParentReadableId &&
+              consumedReadableIds.some(
+                (readableId) => readableId !== currentParentReadableId
+              )
+            ) {
+              throw new Error(
+                "This part retains readable IDs from consumed tracked parts and cannot combine multiple readable IDs"
+              );
+            }
+
+            if (!currentParentReadableId && consumedReadableIds.length > 1) {
+              throw new Error(
+                "This part retains readable IDs from consumed tracked parts, but multiple readable IDs were issued at once"
+              );
+            }
+
+            if (!currentParentReadableId && consumedReadableIds.length === 1) {
+              await trx
+                .updateTable("trackedEntity")
+                .set({
+                  readableId: consumedReadableIds[0],
+                  updatedAt: new Date().toISOString(),
+                  updatedBy: userId,
+                })
+                .where("id", "=", parentTrackedEntityId)
+                .execute();
+
+              parentTrackedEntity.readableId = consumedReadableIds[0];
+            }
           }
 
           // Create tracked activity
@@ -1742,6 +1945,7 @@ serve(async (req: Request) => {
             .where("id", "=", parentTrackedEntityId)
             .select([
               "id",
+              "readableId",
               "sourceDocumentId",
               "quantity",
               "attributes",
@@ -1752,6 +1956,32 @@ serve(async (req: Request) => {
           if (!parentTrackedEntity) {
             throw new Error("Parent tracked entity not found");
           }
+
+          const parentItem = parentTrackedEntity.sourceDocumentId
+            ? await trx
+                .selectFrom("item")
+                .where("id", "=", parentTrackedEntity.sourceDocumentId)
+                .select(["type", "readableId"])
+                .executeTakeFirst()
+            : undefined;
+
+          const parentPartSettings =
+            parentItem?.type === "Part"
+              ? await trx
+                  .selectFrom("part")
+                  .where("id", "=", parentItem.readableId)
+                  .where("companyId", "=", companyId)
+                  .select("retainReadableIdFromConsumedTrackedEntity")
+                  .executeTakeFirst()
+              : undefined;
+
+          const shouldClearRetainedReadableId =
+            Boolean(parentPartSettings?.retainReadableIdFromConsumedTrackedEntity) &&
+            Boolean(parentTrackedEntity.readableId?.trim()) &&
+            trackedEntities.some(
+              (entity) =>
+                entity.readableId?.trim() === parentTrackedEntity.readableId?.trim()
+            );
 
           // Create tracked activity for unconsume
           const activityId = nanoid();
@@ -1838,6 +2068,18 @@ serve(async (req: Request) => {
             await trx
               .insertInto("trackedActivityOutput")
               .values(trackedActivityOutputs)
+              .execute();
+          }
+
+          if (shouldClearRetainedReadableId) {
+            await trx
+              .updateTable("trackedEntity")
+              .set({
+                readableId: null,
+                updatedAt: new Date().toISOString(),
+                updatedBy: userId,
+              })
+              .where("id", "=", parentTrackedEntityId)
               .execute();
           }
 

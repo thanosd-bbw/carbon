@@ -1560,6 +1560,171 @@ export async function getPartUsedIn(
   };
 }
 
+export async function getSerializedItemsWithInventoryOnHand(
+  client: SupabaseClient<Database>,
+  itemIds: string[],
+  companyId: string
+) {
+  if (itemIds.length === 0) {
+    return {
+      data: [] as string[],
+      error: null
+    };
+  }
+
+  const ledgers = await client
+    .from("itemLedger")
+    .select("itemId, quantity, trackedEntityId")
+    .in("itemId", itemIds)
+    .eq("companyId", companyId)
+    .not("trackedEntityId", "is", null);
+
+  if (ledgers.error) return ledgers;
+
+  const quantityByItemAndTrackedEntity = new Map<string, number>();
+
+  for (const ledger of ledgers.data ?? []) {
+    if (!ledger.itemId || !ledger.trackedEntityId) continue;
+
+    const key = `${ledger.itemId}:${ledger.trackedEntityId}`;
+    const currentQuantity = quantityByItemAndTrackedEntity.get(key) ?? 0;
+    quantityByItemAndTrackedEntity.set(
+      key,
+      currentQuantity + Number(ledger.quantity ?? 0)
+    );
+  }
+
+  const blockedItemIds = new Set<string>();
+
+  for (const [
+    key,
+    quantityOnHand
+  ] of quantityByItemAndTrackedEntity.entries()) {
+    if (quantityOnHand > 0) {
+      blockedItemIds.add(key.split(":")[0] ?? "");
+    }
+  }
+
+  return {
+    data: Array.from(blockedItemIds).filter(Boolean),
+    error: null
+  };
+}
+
+export async function validateHumanReadableIdPrefix(
+  client: SupabaseClient<Database>,
+  args: {
+    companyId: string;
+    prefix: string | null | undefined;
+    partReadableId: string;
+  }
+) {
+  const normalizedPrefix = args.prefix?.trim().toUpperCase();
+
+  if (!normalizedPrefix) {
+    return {
+      data: null,
+      error: null
+    };
+  }
+
+  const existingPart = await client
+    .from("part")
+    .select("id")
+    .eq("companyId", args.companyId)
+    .eq("serialReadableIdPrefix", normalizedPrefix)
+    .neq("id", args.partReadableId)
+    .maybeSingle();
+
+  if (existingPart.error) return existingPart;
+
+  if (existingPart.data) {
+    return {
+      data: null,
+      error: {
+        message: "Human Readable ID Prefix must be unique within the company."
+      }
+    };
+  }
+
+  const trackedEntities = await client
+    .from("trackedEntity")
+    .select("id, readableId, sourceDocumentId")
+    .eq("companyId", args.companyId)
+    .like("readableId", `${normalizedPrefix}%`);
+
+  if (trackedEntities.error) return trackedEntities;
+
+  const matchingTrackedEntities = (trackedEntities.data ?? []).filter(
+    (trackedEntity) => {
+      const readableId = trackedEntity.readableId?.trim() ?? "";
+      const suffix = readableId.slice(normalizedPrefix.length);
+
+      return (
+        readableId.startsWith(normalizedPrefix) &&
+        suffix.length > 0 &&
+        /^\d+$/.test(suffix)
+      );
+    }
+  );
+
+  if (matchingTrackedEntities.length === 0) {
+    return {
+      data: null,
+      error: null
+    };
+  }
+
+  const sourceDocumentIds = Array.from(
+    new Set(
+      matchingTrackedEntities
+        .map((trackedEntity) => trackedEntity.sourceDocumentId)
+        .filter((sourceDocumentId): sourceDocumentId is string =>
+          Boolean(sourceDocumentId)
+        )
+    )
+  );
+
+  const sourceItems =
+    sourceDocumentIds.length > 0
+      ? await client
+          .from("item")
+          .select("id, readableId")
+          .in("id", sourceDocumentIds)
+      : { data: [], error: null };
+
+  if (sourceItems.error) return sourceItems;
+
+  const readableIdByItemId = new Map(
+    (sourceItems.data ?? []).map((item) => [item.id, item.readableId])
+  );
+
+  const conflictingTrackedEntity = matchingTrackedEntities.find(
+    (trackedEntity) => {
+      const sourceItemReadableId = trackedEntity.sourceDocumentId
+        ? readableIdByItemId.get(trackedEntity.sourceDocumentId)
+        : null;
+
+      return sourceItemReadableId !== args.partReadableId;
+    }
+  );
+
+  if (conflictingTrackedEntity) {
+    return {
+      data: null,
+      error: {
+        message:
+          "Human Readable ID Prefix conflicts with existing human-readable IDs already used elsewhere in this company."
+      }
+    };
+  }
+
+  return {
+    data: null,
+    error: null
+  };
+}
+
 export async function getPickMethod(
   client: SupabaseClient<Database>,
   itemId: string,
@@ -2133,6 +2298,14 @@ export async function upsertPart(
       })
 ) {
   if ("createdBy" in part) {
+    const prefixValidation = await validateHumanReadableIdPrefix(client, {
+      companyId: part.companyId,
+      prefix: part.serialReadableIdPrefix,
+      partReadableId: part.id
+    });
+
+    if (prefixValidation.error) return prefixValidation;
+
     const itemInsert = await client
       .from("item")
       .insert({
@@ -2160,6 +2333,7 @@ export async function upsertPart(
         companyId: part.companyId,
         createdBy: part.createdBy,
         customFields: part.customFields,
+        enableProductionReadableIds: part.enableProductionReadableIds,
         serialReadableIdPrefix: part.serialReadableIdPrefix ?? null,
         retainReadableIdFromConsumedTrackedEntity:
           part.retainReadableIdFromConsumedTrackedEntity
@@ -2202,7 +2376,7 @@ export async function upsertPart(
 
   const currentItem = await client
     .from("item")
-    .select("readableId, companyId")
+    .select("readableId, companyId, itemTrackingType")
     .eq("id", part.id)
     .single();
 
@@ -2210,12 +2384,45 @@ export async function upsertPart(
 
   const currentPart = await client
     .from("part")
-    .select("serialReadableIdPrefix, retainReadableIdFromConsumedTrackedEntity")
+    .select(
+      "enableProductionReadableIds, serialReadableIdPrefix, retainReadableIdFromConsumedTrackedEntity"
+    )
     .eq("id", currentItem.data.readableId)
     .eq("companyId", currentItem.data.companyId)
     .single();
 
   if (currentPart.error) return currentPart;
+
+  const prefixValidation = await validateHumanReadableIdPrefix(client, {
+    companyId: currentItem.data.companyId,
+    prefix: part.serialReadableIdPrefix,
+    partReadableId: currentItem.data.readableId
+  });
+
+  if (prefixValidation.error) return prefixValidation;
+
+  if (
+    currentItem.data.itemTrackingType === "Serial" &&
+    part.itemTrackingType !== "Serial"
+  ) {
+    const serializedInventory = await getSerializedItemsWithInventoryOnHand(
+      client,
+      [part.id],
+      currentItem.data.companyId
+    );
+
+    if (serializedInventory.error) return serializedInventory;
+
+    if ((serializedInventory.data ?? []).length > 0) {
+      return {
+        data: null,
+        error: {
+          message:
+            "This part cannot be changed out of Serial tracking while serialized entities still exist in inventory. Remove all serialized inventory for the part first."
+        }
+      };
+    }
+  }
 
   const itemUpdate = {
     name: part.name,
@@ -2229,6 +2436,7 @@ export async function upsertPart(
 
   const partUpdate = {
     customFields: part.customFields,
+    enableProductionReadableIds: part.enableProductionReadableIds,
     serialReadableIdPrefix: part.serialReadableIdPrefix ?? null,
     retainReadableIdFromConsumedTrackedEntity:
       part.retainReadableIdFromConsumedTrackedEntity,

@@ -224,7 +224,12 @@ serve(async (req: Request) => {
           const item = await trx
             .selectFrom("item")
             .where("id", "=", job?.itemId!)
-            .select(["readableId", "readableIdWithRevision", "type"])
+            .select([
+              "itemTrackingType",
+              "readableId",
+              "readableIdWithRevision",
+              "type",
+            ])
             .executeTakeFirstOrThrow();
 
           const partReadableIdSettings =
@@ -233,7 +238,10 @@ serve(async (req: Request) => {
                   .selectFrom("part")
                   .where("id", "=", item.readableId)
                   .where("companyId", "=", companyId)
-                  .select("retainReadableIdFromConsumedTrackedEntity")
+                  .select([
+                    "enableProductionReadableIds",
+                    "retainReadableIdFromConsumedTrackedEntity",
+                  ])
                   .executeTakeFirst()
               : null;
 
@@ -348,7 +356,9 @@ serve(async (req: Request) => {
 
             const shouldRetainReadableIdFromConsumedTrackedEntity =
               item.type === "Part" &&
+              item.itemTrackingType === "Serial" &&
               Boolean(
+                partReadableIdSettings?.enableProductionReadableIds &&
                 partReadableIdSettings?.retainReadableIdFromConsumedTrackedEntity
               );
 
@@ -363,8 +373,10 @@ serve(async (req: Request) => {
 
             if (
               !shouldRetainReadableIdFromConsumedTrackedEntity &&
+              partReadableIdSettings?.enableProductionReadableIds &&
               companySettings.autoAssignManufacturedSerialReadableIdsOnReceipt &&
-              item.type === "Part"
+              item.type === "Part" &&
+              item.itemTrackingType === "Serial"
             ) {
 
               if (trackedEntitiesWithoutReadableIds.length > 0) {
@@ -408,8 +420,6 @@ serve(async (req: Request) => {
                     .updateTable("trackedEntity")
                     .set({
                       readableId,
-                      updatedAt: new Date().toISOString(),
-                      updatedBy: userId,
                     })
                     .where("id", "=", trackedEntity.id)
                     .execute();
@@ -1494,7 +1504,7 @@ serve(async (req: Request) => {
             ? await trx
                 .selectFrom("item")
                 .where("id", "=", parentTrackedEntity.sourceDocumentId)
-                .select(["type", "readableId"])
+                .select(["itemTrackingType", "readableId", "type"])
                 .executeTakeFirst()
             : undefined;
 
@@ -1504,11 +1514,16 @@ serve(async (req: Request) => {
                   .selectFrom("part")
                   .where("id", "=", parentItem.readableId)
                   .where("companyId", "=", companyId)
-                  .select("retainReadableIdFromConsumedTrackedEntity")
+                  .select([
+                    "enableProductionReadableIds",
+                    "retainReadableIdFromConsumedTrackedEntity",
+                  ])
                   .executeTakeFirst()
               : undefined;
 
           const shouldRetainParentReadableId = Boolean(
+            parentItem?.itemTrackingType === "Serial" &&
+            parentPartSettings?.enableProductionReadableIds &&
             parentPartSettings?.retainReadableIdFromConsumedTrackedEntity
           );
 
@@ -1546,8 +1561,6 @@ serve(async (req: Request) => {
                 .updateTable("trackedEntity")
                 .set({
                   readableId: consumedReadableIds[0],
-                  updatedAt: new Date().toISOString(),
-                  updatedBy: userId,
                 })
                 .where("id", "=", parentTrackedEntityId)
                 .execute();
@@ -1961,7 +1974,7 @@ serve(async (req: Request) => {
             ? await trx
                 .selectFrom("item")
                 .where("id", "=", parentTrackedEntity.sourceDocumentId)
-                .select(["type", "readableId"])
+                .select(["itemTrackingType", "readableId", "type"])
                 .executeTakeFirst()
             : undefined;
 
@@ -1971,11 +1984,16 @@ serve(async (req: Request) => {
                   .selectFrom("part")
                   .where("id", "=", parentItem.readableId)
                   .where("companyId", "=", companyId)
-                  .select("retainReadableIdFromConsumedTrackedEntity")
+                  .select([
+                    "enableProductionReadableIds",
+                    "retainReadableIdFromConsumedTrackedEntity",
+                  ])
                   .executeTakeFirst()
               : undefined;
 
           const shouldClearRetainedReadableId =
+            parentItem?.itemTrackingType === "Serial" &&
+            Boolean(parentPartSettings?.enableProductionReadableIds) &&
             Boolean(parentPartSettings?.retainReadableIdFromConsumedTrackedEntity) &&
             Boolean(parentTrackedEntity.readableId?.trim()) &&
             trackedEntities.some(
@@ -2076,8 +2094,6 @@ serve(async (req: Request) => {
               .updateTable("trackedEntity")
               .set({
                 readableId: null,
-                updatedAt: new Date().toISOString(),
-                updatedBy: userId,
               })
               .where("id", "=", parentTrackedEntityId)
               .execute();

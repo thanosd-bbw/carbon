@@ -3,6 +3,10 @@ import type { Database } from "@carbon/database";
 import { getMaterialDescription, getMaterialId } from "@carbon/utils";
 import type { ActionFunctionArgs } from "react-router";
 
+import {
+  getSerializedItemsWithInventoryOnHand,
+  validateHumanReadableIdPrefix
+} from "~/modules/items";
 import { getCompanySettings } from "~/modules/settings";
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -25,6 +29,47 @@ export async function action({ request }: ActionFunctionArgs) {
     case "name":
     case "replenishmentSystem":
     case "unitOfMeasureCode":
+      if (field === "itemTrackingType" && value !== "Serial") {
+        const currentItems = await client
+          .from("item")
+          .select("id, itemTrackingType, type")
+          .in("id", items as string[])
+          .eq("companyId", companyId);
+
+        if (currentItems.error) {
+          return currentItems;
+        }
+
+        const serializedPartIds = (currentItems.data ?? [])
+          .filter(
+            (item) => item.type === "Part" && item.itemTrackingType === "Serial"
+          )
+          .map((item) => item.id);
+
+        if (serializedPartIds.length > 0) {
+          const serializedInventory =
+            await getSerializedItemsWithInventoryOnHand(
+              client,
+              serializedPartIds,
+              companyId
+            );
+
+          if (serializedInventory.error) {
+            return serializedInventory;
+          }
+
+          if ((serializedInventory.data ?? []).length > 0) {
+            return {
+              error: {
+                message:
+                  "This part cannot be changed out of Serial tracking while serialized entities still exist in inventory. Remove all serialized inventory for the part first."
+              },
+              data: null
+            };
+          }
+        }
+      }
+
       if (field === "replenishmentSystem" && value !== "Buy and Make") {
         return await client
           .from("item")
@@ -394,6 +439,8 @@ export async function action({ request }: ActionFunctionArgs) {
         }
         return itemUpdates;
       }
+    case "enableProductionReadableIds":
+    case "nextSerialReadableIdNumber":
     case "serialReadableIdPrefix":
     case "retainReadableIdFromConsumedTrackedEntity":
       if (items.length > 1) {
@@ -405,6 +452,11 @@ export async function action({ request }: ActionFunctionArgs) {
 
       const [partItemId] = items as string[];
       const normalizedPrefix = value.trim().toUpperCase();
+      const parsedNextReadableIdNumber =
+        field === "nextSerialReadableIdNumber"
+          ? Number.parseInt(value, 10)
+          : null;
+
       if (
         field === "serialReadableIdPrefix" &&
         normalizedPrefix &&
@@ -412,7 +464,22 @@ export async function action({ request }: ActionFunctionArgs) {
       ) {
         return {
           error: {
-            message: "Prefix may only contain letters, numbers, - and _"
+            message:
+              "Human Readable ID Prefix may only contain letters, numbers, - and _"
+          },
+          data: null
+        };
+      }
+
+      if (
+        field === "nextSerialReadableIdNumber" &&
+        (!Number.isInteger(parsedNextReadableIdNumber) ||
+          parsedNextReadableIdNumber < 1)
+      ) {
+        return {
+          error: {
+            message:
+              "Next readable ID number must be a whole number greater than 0"
           },
           data: null
         };
@@ -437,7 +504,7 @@ export async function action({ request }: ActionFunctionArgs) {
       const currentPart = await client
         .from("part")
         .select(
-          "serialReadableIdPrefix, retainReadableIdFromConsumedTrackedEntity"
+          "enableProductionReadableIds, nextSerialReadableIdNumber, serialReadableIdPrefix, retainReadableIdFromConsumedTrackedEntity"
         )
         .eq("id", partItem.data.readableId)
         .eq("companyId", companyId)
@@ -447,9 +514,68 @@ export async function action({ request }: ActionFunctionArgs) {
         return currentPart;
       }
 
+      if (field === "serialReadableIdPrefix") {
+        const prefixValidation = await validateHumanReadableIdPrefix(client, {
+          companyId,
+          prefix: normalizedPrefix || null,
+          partReadableId: partItem.data.readableId
+        });
+
+        if (prefixValidation.error) {
+          return prefixValidation;
+        }
+      }
+
+      if (
+        field === "nextSerialReadableIdNumber" &&
+        !currentPart.data?.enableProductionReadableIds
+      ) {
+        return {
+          error: {
+            message:
+              "Turn on production readable IDs for this part before editing the next generated readable ID"
+          },
+          data: null
+        };
+      }
+
+      if (
+        field === "nextSerialReadableIdNumber" &&
+        !currentPart.data?.serialReadableIdPrefix
+      ) {
+        return {
+          error: {
+            message:
+              "Set a Human Readable ID Prefix before editing the next generated readable ID"
+          },
+          data: null
+        };
+      }
+
+      if (
+        field === "nextSerialReadableIdNumber" &&
+        currentPart.data?.retainReadableIdFromConsumedTrackedEntity
+      ) {
+        return {
+          error: {
+            message:
+              "This part retains readable IDs from consumed parts and does not generate a new next ID"
+          },
+          data: null
+        };
+      }
+
       return client
         .from("part")
         .update({
+          enableProductionReadableIds:
+            field === "enableProductionReadableIds"
+              ? value === "on"
+              : (currentPart.data?.enableProductionReadableIds ?? false),
+          nextSerialReadableIdNumber:
+            field === "nextSerialReadableIdNumber"
+              ? parsedNextReadableIdNumber
+              : (currentPart.data?.nextSerialReadableIdNumber ?? null),
           serialReadableIdPrefix:
             field === "serialReadableIdPrefix"
               ? normalizedPrefix || null

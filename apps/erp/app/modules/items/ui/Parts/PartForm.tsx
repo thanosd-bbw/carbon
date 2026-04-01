@@ -181,6 +181,17 @@ const PartForm = ({ initialValues, type = "card", onClose }: PartFormProps) => {
   const [defaultMethodType, setDefaultMethodType] = useState<string>(
     initialValues.defaultMethodType ?? "Pick"
   );
+  const [itemTrackingType, setItemTrackingType] = useState<string>(
+    initialValues.itemTrackingType ?? "Inventory"
+  );
+  const [enableProductionReadableIds, setEnableProductionReadableIds] =
+    useState<boolean>(initialValues.enableProductionReadableIds ?? false);
+  const [
+    retainReadableIdFromConsumedTrackedEntity,
+    setRetainReadableIdFromConsumedTrackedEntity
+  ] = useState<boolean>(
+    initialValues.retainReadableIdFromConsumedTrackedEntity ?? false
+  );
   const itemReplenishmentSystemOptions =
     itemReplenishmentSystems.map((itemReplenishmentSystem) => ({
       label: (
@@ -260,19 +271,48 @@ const PartForm = ({ initialValues, type = "card", onClose }: PartFormProps) => {
                   name="itemTrackingType"
                   label="Tracking Type"
                   options={itemTrackingTypeOptions}
+                  onChange={(newValue) => {
+                    const nextTrackingType = newValue?.value ?? "Inventory";
+                    setItemTrackingType(nextTrackingType);
+
+                    if (nextTrackingType !== "Serial") {
+                      setEnableProductionReadableIds(false);
+                    }
+                  }}
                 />
 
-                <Input
-                  name="serialReadableIdPrefix"
-                  label="Serial Readable ID Prefix"
-                  helperText="Used when this part generates a new readable ID on receipt."
-                />
+                {itemTrackingType === "Serial" && (
+                  <BooleanField
+                    name="enableProductionReadableIds"
+                    label="Use Production Readable IDs"
+                    description="Enable this to automatically assign a human-readable serial number when the part is produced, or to allow that serial number to carry forward from an upstream tracked part."
+                    onChange={(value) => {
+                      setEnableProductionReadableIds(value);
+                    }}
+                  />
+                )}
 
-                <BooleanField
-                  name="retainReadableIdFromConsumedTrackedEntity"
-                  label="Retain Upstream Readable ID"
-                  description="Carry the readable ID from a consumed tracked part through this part instead of generating a new one on receipt."
-                />
+                {itemTrackingType === "Serial" &&
+                  enableProductionReadableIds && (
+                    <>
+                      <BooleanField
+                        name="retainReadableIdFromConsumedTrackedEntity"
+                        label="Retain Upstream Readable ID"
+                        description="Carry the readable ID from a consumed tracked part through this part instead of generating a new one on receipt."
+                        onChange={(value) => {
+                          setRetainReadableIdFromConsumedTrackedEntity(value);
+                        }}
+                      />
+
+                      {!retainReadableIdFromConsumedTrackedEntity && (
+                        <Input
+                          name="serialReadableIdPrefix"
+                          label="Human Readable ID Prefix"
+                          helperText="Used when this part generates a new readable ID on receipt. Uppercase letters, numbers, hyphen (-), and underscore (_) only. No spaces."
+                        />
+                      )}
+                    </>
+                  )}
 
                 <Select
                   name="replenishmentSystem"

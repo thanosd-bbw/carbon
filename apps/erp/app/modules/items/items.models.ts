@@ -491,7 +491,8 @@ export const serialReadableIdPrefixValidator = zfd
     return normalized ? normalized : undefined;
   })
   .refine((value) => value === undefined || /^[A-Z0-9_-]+$/.test(value), {
-    message: "Prefix may only contain letters, numbers, - and _"
+    message:
+      "Human Readable ID Prefix may only contain letters, numbers, - and _"
   });
 
 export const partValidator = itemValidator.merge(
@@ -500,6 +501,7 @@ export const partValidator = itemValidator.merge(
     revision: z.string().min(1, { message: "Revision is required" }),
     modelUploadId: zfd.text(z.string().optional()),
     lotSize: zfd.numeric(z.number().min(0).optional()),
+    enableProductionReadableIds: zfd.checkbox(),
     serialReadableIdPrefix: serialReadableIdPrefixValidator,
     retainReadableIdFromConsumedTrackedEntity: zfd.checkbox()
   })

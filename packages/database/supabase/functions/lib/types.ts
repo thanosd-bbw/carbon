@@ -21079,6 +21079,7 @@ export type Database = {
           createdAt: string
           createdBy: string
           customFields: Json | null
+          enableProductionReadableIds: boolean
           fromDate: string | null
           id: string
           nextSerialReadableIdNumber: number | null
@@ -21096,6 +21097,7 @@ export type Database = {
           createdAt?: string
           createdBy: string
           customFields?: Json | null
+          enableProductionReadableIds?: boolean
           fromDate?: string | null
           id?: string
           nextSerialReadableIdNumber?: number | null
@@ -21113,6 +21115,7 @@ export type Database = {
           createdAt?: string
           createdBy?: string
           customFields?: Json | null
+          enableProductionReadableIds?: boolean
           fromDate?: string | null
           id?: string
           nextSerialReadableIdNumber?: number | null
@@ -57622,6 +57625,7 @@ export type Database = {
           modelPath: string
           modelSize: number
           name: string
+          enableProductionReadableIds: boolean
           nextSerialReadableIdNumber: number
           notes: Json
           readableId: string

@@ -228,13 +228,18 @@ const JobProperties = () => {
 
               return (
                 <>
+                  <p className="text-xs text-muted-foreground">
+                    Manual override for tracked entity human-readable IDs.
+                    Auto-generated readable IDs are assigned on receipt when the
+                    part is configured for production readable IDs.
+                  </p>
                   {trackedEntities.map((entity, index) => {
                     const trackingNumber: string = entity?.readableId ?? "";
 
                     const label =
-                      trackingType === "Serial" && trackedEntities.length > 1
-                        ? `${trackingType} ${index + 1}`
-                        : `${trackingType} Number`;
+                      trackedEntities.length > 1
+                        ? `Human Readable ID ${index + 1}`
+                        : "Human Readable ID";
 
                     return (
                       <ValidatedForm
@@ -253,6 +258,7 @@ const JobProperties = () => {
                           value={trackingNumber}
                           size="sm"
                           inline
+                          isReadOnly={isDisabled}
                           onBlur={(e) => {
                             onUpdateBatchNumber(entity.id, e.target.value);
                           }}

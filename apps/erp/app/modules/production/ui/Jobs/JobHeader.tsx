@@ -105,6 +105,10 @@ const JobHeader = () => {
 
   const statusFetcher = useFetcher<{}>();
   const status = routeData?.job?.status;
+  const hasInventoryReceipts =
+    (routeData?.job?.quantityReceivedToInventory ?? 0) > 0;
+  const preventCompletedJobReopen =
+    status === "Completed" && hasInventoryReceipts;
 
   const getOptionFromPath = (jobId: string) => {
     if (location.pathname.includes(path.to.jobMaterials(jobId)))
@@ -370,6 +374,7 @@ const JobHeader = () => {
               }
               isDisabled={
                 !["Cancelled", "Completed"].includes(status ?? "") ||
+                preventCompletedJobReopen ||
                 statusFetcher.state !== "idle" ||
                 !permissions.can("update", "production")
               }

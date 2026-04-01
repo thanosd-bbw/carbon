@@ -38,6 +38,39 @@ export async function action({ request, params }: ActionFunctionArgs) {
     );
   }
 
+  const currentJob = await client
+    .from("job")
+    .select("status, quantityReceivedToInventory")
+    .eq("id", id)
+    .single();
+
+  if (currentJob.error) {
+    throw redirect(
+      requestReferrer(request) ?? path.to.job(id),
+      await flash(request, error(currentJob.error, "Failed to load job state"))
+    );
+  }
+
+  const hasInventoryReceipts =
+    (currentJob.data?.quantityReceivedToInventory ?? 0) > 0;
+
+  if (
+    currentJob.data?.status === "Completed" &&
+    hasInventoryReceipts &&
+    status !== "Completed"
+  ) {
+    throw redirect(
+      requestReferrer(request) ?? path.to.job(id),
+      await flash(
+        request,
+        error(
+          null,
+          "Completed jobs that have already been received into inventory cannot be reopened or otherwise moved to a new status. Start a new or rework job instead."
+        )
+      )
+    );
+  }
+
   if (status === "Ready") {
     const { data } = await client
       .from("job")
